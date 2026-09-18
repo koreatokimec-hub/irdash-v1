@@ -3373,34 +3373,17 @@
           });
         });
         /* 업체·제품군 화면엔 재고액·회전율만 있고 3/6/12개월 부동재고 구간이 없었다.
-           categoryFlowMonthly(사전 집계본)엔 그 구간이 아예 없지만, 원본 품목별 자료
-           (itemMonthly)엔 품목마다 재고상태(inventoryStatus, 실제 값은 "일반재고"·
-           "부동재고3"·"부동재고6"·"부동재고12"·"미판매" 식이다 — "3개월"이 아니다)가
-           있으므로 여기서 직접 업체·제품군 단위로 다시 집계한다.
-           품목 → 업체·제품군 매칭은 buildProducts()가 쓰는 것과 똑같이 resolveFlow()로
-           해야 한다 — 품목 자체의 category/finalCategory 문자열과 categoryFlowMonthly의
-           category 키 표기가 다를 수 있다(예: 품목 쪽 "WALVOIL" ↔ 흐름표 쪽 "WALVOIL (KR)").
-           직접 문자열을 맞추면 하나도 안 걸린다. */
-        const codeMap = buildCategoryCodeMap(details);
-        const statusTotals = {}; // statusTotals[type][category][bucket] = 월별 합계(raw amount) 배열
-        months.forEach((_, index) => {
-          (details[index].itemMonthly || []).forEach(item => {
-            const type = normalizeAccountType(item.accountType);
-            const finalCategory = String(item.finalCategory ?? "").trim();
-            const category = String(item.category ?? "").trim();
-            const flow = resolveFlow(codeMap, type, finalCategory, category);
-            if (!flow) return;
-            const bucket = statusBucketOf(item.inventoryStatus, item.agingBucket);
-            if (!statusTotals[flow.type]) statusTotals[flow.type] = {};
-            if (!statusTotals[flow.type][flow.category]) statusTotals[flow.type][flow.category] = {};
-            if (!statusTotals[flow.type][flow.category][bucket]) statusTotals[flow.type][flow.category][bucket] = new Array(months.length).fill(0);
-            statusTotals[flow.type][flow.category][bucket][index] += Number(item.amount || 0);
-          });
+           categoryFlowMonthly(사전 집계본)엔 그 구간이 아예 없어서, 예전엔 원본
+           품목별 자료(itemMonthly)를 매달 전부 훑어 업체·제품군 단위로 재집계했다.
+           지금은 그 집계를 서버가 미리 해준 categoryFlowStatus(월×구분×제품군×
+           재고상태 단위로 이미 합산됨, resolveFlow와 동일한 매칭 로직 적용됨)를
+           그대로 읽기만 한다. */
+        const statusSeriesFor = (accountType, category, bucket) => months.map((_, index) => {
+          const total = (details[index].categoryFlowStatusMonthly || [])
+            .filter(row => row.accountType === accountType && row.category === category && row.status === bucket)
+            .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+          return toMillion(total);
         });
-        const statusSeriesFor = (accountType, category, bucket) => {
-          const arr = statusTotals[accountType] && statusTotals[accountType][category] && statusTotals[accountType][category][bucket];
-          return arr ? arr.map(toMillion) : months.map(() => 0);
-        };
         [...keys].forEach(compoundKey => {
           const [accountType, category] = compoundKey.split("|");
           if (!categoryFlows[accountType]) categoryFlows[accountType] = {};
@@ -3572,16 +3555,19 @@
       }
 
       function buildProducts(months, details) {
-        const monthlyItems = details.map(detail => new Map(
-          (detail.itemMonthly || []).map(item => [item.code, item])
-        ));
+        // 품목별 월별 values/statuses는 더 이상 매달 itemMonthly를 훑어 만들지 않고
+        // (품목당 한 행에 월별 배열을 들고 있는) itemTrend에서 바로 읽는다.
+        const itemTrend = details[details.length - 1]?.itemTrend || new Map();
         const codeMap = buildCategoryCodeMap(details);
+        // 어떤 품목이 "현재" 존재하는지/구분(type)은 여전히 당월 raw item 목록으로 정한다.
         const currentItems = details[details.length - 1].itemMonthly || [];
         return currentItems.map(item => {
           const type = normalizeAccountType(item.accountType);
           const finalCategory = String(item.finalCategory ?? "").trim();
           const category = String(item.category ?? "").trim();
           const flow = resolveFlow(codeMap, type, finalCategory, category);
+          const trend = itemTrend.get(item.code);
+          const trendMonths = trend?.months || [];
           return {
             code: item.code,
             name: item.name,
@@ -3594,10 +3580,16 @@
             flowType: flow?.type ?? null,
             flowCategory: flow?.category ?? null,
             status: item.inventoryStatus || "일반재고",
-            values: months.map((_, index) => toMillion(monthlyItems[index].get(item.code)?.amount)),
+            values: months.map(month => {
+              const index = trendMonths.indexOf(month);
+              return index >= 0 ? toMillion(trend.values[index]) : 0;
+            }),
             // 품목 하나는 한 달에 재고상태 하나에만 속한다(3/6/12개월로 동시에 나뉘지 않는다).
             // 달마다 어느 상태였는지 이력을 남겨 품목 상세에서 "몇 개월째 부동재고인지" 보여준다.
-            statuses: months.map((_, index) => monthlyItems[index].get(item.code)?.inventoryStatus || null)
+            statuses: months.map(month => {
+              const index = trendMonths.indexOf(month);
+              return index >= 0 ? (trend.statuses[index] || null) : null;
+            })
           };
         });
       }
@@ -3611,26 +3603,35 @@
           summaryPayload.monthlySummary.map(row => [row.month, row])
         );
         const summarySeries = key => months.map(month => Number(summaryByMonth.get(month)?.[key] || 0));
-        const accountTypeSeries = accountType => details.map(detail => {
-          const itemTotal = (detail.itemMonthly || [])
-            .filter(item => normalizeAccountType(item.accountType) === accountType)
-            .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+        // 구분(상품/제품/원부자재)별 월별 합계·부동재고 합계도 예전엔 매달 itemMonthly를
+        // 전부 훑어 만들었다. itemTrend(품목당 한 행, 월별 values/statuses 배열)를
+        // 한 번만 순회해 두 합계를 같이 쌓는다.
+        const itemTrendRows = [...(details[details.length - 1]?.itemTrend || new Map()).values()];
+        const accountTypeTotals = { "상품": months.map(() => 0), "제품": months.map(() => 0), "원부자재": months.map(() => 0) };
+        const accountTypeRisk = { "상품": months.map(() => 0), "제품": months.map(() => 0), "원부자재": months.map(() => 0) };
+        itemTrendRows.forEach(item => {
+          const type = normalizeAccountType(item.accountType);
+          if (!accountTypeTotals[type]) return;
+          const trendMonths = item.months || [];
+          months.forEach((month, index) => {
+            const ti = trendMonths.indexOf(month);
+            if (ti < 0) return;
+            const amount = Number(item.values[ti] || 0);
+            accountTypeTotals[type][index] += amount;
+            if (["3개월", "6개월", "12개월"].includes(statusBucketOf(item.statuses[ti]))) {
+              accountTypeRisk[type][index] += amount;
+            }
+          });
+        });
+        const accountTypeSeries = accountType => months.map((month, index) => {
           const inTransit = accountType === "상품"
-            ? (detail.categoryFlowMonthly || [])
+            ? (details[index].categoryFlowMonthly || [])
                 .filter(row => row.accountType === "상품" && row.category === "미착")
                 .reduce((sum, row) => sum + Number(row.amount || 0), 0)
             : 0;
-          return toMillion(itemTotal + inTransit);
+          return toMillion(accountTypeTotals[accountType][index] + inTransit);
         });
-        const riskTypeSeries = accountType => details.map(detail =>
-          toMillion((detail.itemMonthly || [])
-            .filter(item => {
-              const status = `${item.inventoryStatus || ""} ${item.agingBucket || ""}`;
-              return normalizeAccountType(item.accountType) === accountType
-                && /3개월|6개월|12개월|부동재고3|부동재고6|부동재고12/.test(status);
-            })
-            .reduce((sum, item) => sum + Number(item.amount || 0), 0))
-        );
+        const riskTypeSeries = accountType => accountTypeRisk[accountType].map(toMillion);
         return {
           months,
           inventory: summarySeries("total").map(toMillion),

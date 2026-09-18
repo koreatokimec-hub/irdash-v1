@@ -91,12 +91,31 @@ async function getItemDataset(months) {
   return results.flat().map(toCamel);
 }
 
+// item_trend은 품목당 한 행(월별이 아니라)이라 groupByMonth 대신 code로 묶는다.
+async function getItemTrend(months) {
+  const r = await supabaseRpc('get_item_trend', { p_session_token: SESSION, p_months: months });
+  if (!r.ok || !Array.isArray(r.rows)) throw new Error(r.error || 'itemTrend 로딩 실패');
+  return r.rows.map(toCamel);
+}
+
+async function getCategoryFlowStatus(months) {
+  const r = await supabaseRpc('get_category_flow_status', { p_session_token: SESSION, p_months: months });
+  if (!r.ok || !Array.isArray(r.rows)) throw new Error(r.error || 'categoryFlowStatus 로딩 실패');
+  return r.rows.map(toCamel);
+}
+
 function groupByMonth(rows) {
   const map = new Map();
   rows.forEach(row => {
     if (!map.has(row.month)) map.set(row.month, []);
     map.get(row.month).push(row);
   });
+  return map;
+}
+
+function groupByCode(rows) {
+  const map = new Map();
+  rows.forEach(row => map.set(row.code, row));
   return map;
 }
 
@@ -116,19 +135,29 @@ async function fetchSummary() {
 let allMonthsPromise = null;
 let devProjectsCache = new Map();
 
+// item 전체 이력(24개월치 8만행)은 더 이상 부팅 시 받지 않는다. 대신
+// get_item_trend(품목당 한 행, values/statuses가 월별 배열)와
+// get_category_flow_status(월×구분×제품군×재고상태로 이미 서버에서 집계됨)
+// 두 RPC로 대체한다 — 둘 다 원본 8만행보다 훨씬 작아서 최초 렌더를 막지 않는다.
+// 당월(latest) raw item만 별도로 받는다(상품 테이블/품목 상세 드로어에 필요).
 function ensureAllMonthsLoaded(months) {
   if (!allMonthsPromise) {
+    const latest = months[months.length - 1];
     allMonthsPromise = Promise.all([
       getDataset('organization', months),
       getDataset('organizationStatus', months),
       getDataset('organizationCategory', months),
       getDataset('categoryFlow', months),
-      getItemDataset(months),
-    ]).then(([organization, organizationStatus, organizationCategory, categoryFlow, item]) => ({
+      getItemTrend(months),
+      getCategoryFlowStatus(months),
+      getItemDataset([latest]),
+    ]).then(([organization, organizationStatus, organizationCategory, categoryFlow, itemTrend, categoryFlowStatus, item]) => ({
       organization: groupByMonth(organization),
       organizationStatus: groupByMonth(organizationStatus),
       organizationCategory: groupByMonth(organizationCategory),
       categoryFlow: groupByMonth(categoryFlow),
+      itemTrend: groupByCode(itemTrend),
+      categoryFlowStatus: groupByMonth(categoryFlowStatus),
       item: groupByMonth(item),
     }));
   }
@@ -156,7 +185,10 @@ async function fetchMonth(month) {
     organizationStatusMonthly: grouped.organizationStatus.get(month) || [],
     organizationCategoryMonthly: grouped.organizationCategory.get(month) || [],
     categoryFlowMonthly: grouped.categoryFlow.get(month) || [],
-    itemMonthly: grouped.item.get(month) || [],
+    categoryFlowStatusMonthly: grouped.categoryFlowStatus.get(month) || [],
+    // 당월(latest)에 대해서만 raw item이 채워진다 — 다른 달은 itemTrend를 쓴다.
+    itemMonthly: month === latest ? (grouped.item.get(month) || []) : [],
+    itemTrend: grouped.itemTrend,
     devProjects,
   };
 }
