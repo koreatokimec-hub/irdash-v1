@@ -3599,6 +3599,10 @@
         const endIndex = selectedIndex >= 0 ? selectedIndex : availableMonths.length - 1;
         const months = availableMonths.slice(0, endIndex + 1);
         const details = await Promise.all(months.map(loadMonth));
+        // raw item(itemMonthly)은 화면에 실제로 보이는 마지막(선택된) 달에서만 쓰인다
+        // (buildProducts의 currentItems). 월 범위 전체가 아니라 이 달 하나만 따로 받는다 —
+        // 그렇지 않으면 화면 월 범위(최초 진입 시 전체 개월)만큼 8만행 문제가 되풀이된다.
+        details[details.length - 1].itemMonthly = await window.IRDASH.fetchSelectedItemMonthly(months[months.length - 1]);
         const summaryByMonth = new Map(
           summaryPayload.monthlySummary.map(row => [row.month, row])
         );

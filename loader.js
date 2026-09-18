@@ -139,10 +139,8 @@ let devProjectsCache = new Map();
 // get_item_trend(품목당 한 행, values/statuses가 월별 배열)와
 // get_category_flow_status(월×구분×제품군×재고상태로 이미 서버에서 집계됨)
 // 두 RPC로 대체한다 — 둘 다 원본 8만행보다 훨씬 작아서 최초 렌더를 막지 않는다.
-// 당월(latest) raw item만 별도로 받는다(상품 테이블/품목 상세 드로어에 필요).
 function ensureAllMonthsLoaded(months) {
   if (!allMonthsPromise) {
-    const latest = months[months.length - 1];
     allMonthsPromise = Promise.all([
       getDataset('organization', months),
       getDataset('organizationStatus', months),
@@ -150,15 +148,13 @@ function ensureAllMonthsLoaded(months) {
       getDataset('categoryFlow', months),
       getItemTrend(months),
       getCategoryFlowStatus(months),
-      getItemDataset([latest]),
-    ]).then(([organization, organizationStatus, organizationCategory, categoryFlow, itemTrend, categoryFlowStatus, item]) => ({
+    ]).then(([organization, organizationStatus, organizationCategory, categoryFlow, itemTrend, categoryFlowStatus]) => ({
       organization: groupByMonth(organization),
       organizationStatus: groupByMonth(organizationStatus),
       organizationCategory: groupByMonth(organizationCategory),
       categoryFlow: groupByMonth(categoryFlow),
       itemTrend: groupByCode(itemTrend),
       categoryFlowStatus: groupByMonth(categoryFlowStatus),
-      item: groupByMonth(item),
     }));
   }
   return allMonthsPromise;
@@ -186,14 +182,26 @@ async function fetchMonth(month) {
     organizationCategoryMonthly: grouped.organizationCategory.get(month) || [],
     categoryFlowMonthly: grouped.categoryFlow.get(month) || [],
     categoryFlowStatusMonthly: grouped.categoryFlowStatus.get(month) || [],
-    // 당월(latest)에 대해서만 raw item이 채워진다 — 다른 달은 itemTrend를 쓴다.
-    itemMonthly: month === latest ? (grouped.item.get(month) || []) : [],
+    // raw item은 여기서 채우지 않는다 — buildDashboardData가 매번 이 함수를
+    // 화면 월 범위(months) 전체에 대해 부르므로(추이 차트용), 여기서 채우면
+    // 화면에 보이는 달 수만큼 8만행 문제가 되풀이된다. 실제로 쓰이는 건
+    // 마지막(선택된) 달 하나뿐이라 fetchSelectedItemMonthly로 따로 뺐다
+    // (index.html의 buildDashboardData 참고).
+    itemMonthly: [],
     itemTrend: grouped.itemTrend,
     devProjects,
   };
 }
 
-window.IRDASH = { fetchSummary, fetchMonth };
+// 상품 테이블/품목 상세 드로어가 쓰는 당월 raw item만 달마다(캐시됨) 따로 받는다.
+// month별로 캐싱하므로 같은 달을 다시 선택해도 재요청하지 않는다.
+const itemMonthCache = new Map();
+function fetchSelectedItemMonthly(month) {
+  if (!itemMonthCache.has(month)) itemMonthCache.set(month, getItemDataset([month]));
+  return itemMonthCache.get(month);
+}
+
+window.IRDASH = { fetchSummary, fetchMonth, fetchSelectedItemMonthly };
 
 // ── 로그인 화면 ──────────────────────────────────────────
 
