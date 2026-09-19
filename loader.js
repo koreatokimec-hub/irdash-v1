@@ -121,19 +121,53 @@ function groupByCode(rows) {
 
 // ── summary.json 대체 ────────────────────────────────────────────────
 let summaryCache = null;
-async function fetchSummary() {
-  if (summaryCache) return summaryCache;
-  const rows = await getDataset('summary', null); // p_month/p_months 둘 다 null이면 전체 반환
-  const months = rows.map(r => r.month).sort();
-  summaryCache = { meta: { availableMonths: months }, monthlySummary: rows };
-  return summaryCache;
-}
 
 // ── months/{월}.json 대체 ────────────────────────────────────────────
 // dashboard.html이 부팅 시 전체 월을 Promise.all로 한꺼번에 요청하므로,
 // 월마다 따로 RPC를 부르지 않고 데이터셋별로 "전체 월 한 번"만 받아 나눠 쓴다.
 let allMonthsPromise = null;
 let devProjectsCache = new Map();
+const itemMonthCache = new Map();
+
+// get_boot_bundle(서버가 summary+organization 등+itemTrend+categoryFlowStatus+
+// 최신월 devProjects/itemDataset을 한 번에 묶어 반환하는 RPC, supabase/get_boot_bundle.sql
+// 참고)을 먼저 시도해 첫 화면에 필요한 캐시를 한 번의 왕복으로 채운다. 이 RPC가
+// 아직 없거나 실패하면 아래 개별 함수들이 각자 기존 방식(요청별 RPC)으로 채운다 —
+// 그래서 이 함수는 실패해도 예외를 밖으로 던지지 않는다(호출부가 없다, 그냥 무시됨).
+let bootBundleAttempted = false;
+async function tryLoadBootBundle() {
+  if (bootBundleAttempted) return;
+  bootBundleAttempted = true;
+  try {
+    const r = await supabaseRpc('get_boot_bundle', { p_session_token: SESSION });
+    if (!r.ok) throw new Error(r.error || 'bootBundle 실패');
+    const months = Array.isArray(r.months) ? r.months : (r.summary || []).map(row => row.month).sort();
+    summaryCache = { meta: { availableMonths: months }, monthlySummary: (r.summary || []).map(toCamel) };
+    allMonthsPromise = Promise.resolve({
+      organization: groupByMonth((r.organization || []).map(toCamel)),
+      organizationStatus: groupByMonth((r.organizationStatus || []).map(toCamel)),
+      organizationCategory: groupByMonth((r.organizationCategory || []).map(toCamel)),
+      categoryFlow: groupByMonth((r.categoryFlow || []).map(toCamel)),
+      itemTrend: groupByCode((r.itemTrend || []).map(toCamel)),
+      categoryFlowStatus: groupByMonth((r.categoryFlowStatus || []).map(toCamel)),
+    });
+    if (r.latestMonth) {
+      devProjectsCache.set(r.latestMonth, r.devProjects || null);
+      itemMonthCache.set(r.latestMonth, (r.itemDataset || []).map(toCamel));
+    }
+  } catch (e) {
+    console.warn('get_boot_bundle 실패, 개별 RPC로 폴백:', e.message);
+  }
+}
+
+async function fetchSummary() {
+  if (!summaryCache) await tryLoadBootBundle();
+  if (summaryCache) return summaryCache;
+  const rows = await getDataset('summary', null); // p_month/p_months 둘 다 null이면 전체 반환
+  const months = rows.map(r => r.month).sort();
+  summaryCache = { meta: { availableMonths: months }, monthlySummary: rows };
+  return summaryCache;
+}
 
 // item 전체 이력(24개월치 8만행)은 더 이상 부팅 시 받지 않는다. 대신
 // get_item_trend(품목당 한 행, values/statuses가 월별 배열)와
@@ -195,7 +229,6 @@ async function fetchMonth(month) {
 
 // 상품 테이블/품목 상세 드로어가 쓰는 당월 raw item만 달마다(캐시됨) 따로 받는다.
 // month별로 캐싱하므로 같은 달을 다시 선택해도 재요청하지 않는다.
-const itemMonthCache = new Map();
 function fetchSelectedItemMonthly(month) {
   if (!itemMonthCache.has(month)) itemMonthCache.set(month, getItemDataset([month]));
   return itemMonthCache.get(month);
