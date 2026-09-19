@@ -139,7 +139,10 @@ async function tryLoadBootBundle() {
   if (bootBundleAttempted) return;
   bootBundleAttempted = true;
   try {
-    const r = await supabaseRpc('get_boot_bundle', { p_session_token: SESSION });
+    // attempt=4로 시작해서 실패해도 재시도 없이 바로 던진다 — 번들이 안 되면
+    // 개별 RPC 경로로 최대한 빨리 넘어가야 한다(supabaseRpc 기본 재시도는
+    // 최대 4번, 1초 간격이라 그대로 두면 폴백 전에 3초 넘게 날린다).
+    const r = await supabaseRpc('get_boot_bundle', { p_session_token: SESSION }, 4);
     if (!r.ok) throw new Error(r.error || 'bootBundle 실패');
     const months = Array.isArray(r.months) ? r.months : (r.summary || []).map(row => row.month).sort();
     summaryCache = { meta: { availableMonths: months }, monthlySummary: (r.summary || []).map(toCamel) };
