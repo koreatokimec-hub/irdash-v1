@@ -129,42 +129,14 @@ let allMonthsPromise = null;
 let devProjectsCache = new Map();
 const itemMonthCache = new Map();
 
-// get_boot_bundle(서버가 summary+organization 등+itemTrend+categoryFlowStatus+
-// 최신월 devProjects/itemDataset을 한 번에 묶어 반환하는 RPC, supabase/get_boot_bundle.sql
-// 참고)을 먼저 시도해 첫 화면에 필요한 캐시를 한 번의 왕복으로 채운다. 이 RPC가
-// 아직 없거나 실패하면 아래 개별 함수들이 각자 기존 방식(요청별 RPC)으로 채운다 —
-// 그래서 이 함수는 실패해도 예외를 밖으로 던지지 않는다(호출부가 없다, 그냥 무시됨).
-let bootBundleAttempted = false;
-async function tryLoadBootBundle() {
-  if (bootBundleAttempted) return;
-  bootBundleAttempted = true;
-  try {
-    // attempt=4로 시작해서 실패해도 재시도 없이 바로 던진다 — 번들이 안 되면
-    // 개별 RPC 경로로 최대한 빨리 넘어가야 한다(supabaseRpc 기본 재시도는
-    // 최대 4번, 1초 간격이라 그대로 두면 폴백 전에 3초 넘게 날린다).
-    const r = await supabaseRpc('get_boot_bundle', { p_session_token: SESSION }, 4);
-    if (!r.ok) throw new Error(r.error || 'bootBundle 실패');
-    const months = Array.isArray(r.months) ? r.months : (r.summary || []).map(row => row.month).sort();
-    summaryCache = { meta: { availableMonths: months }, monthlySummary: (r.summary || []).map(toCamel) };
-    allMonthsPromise = Promise.resolve({
-      organization: groupByMonth((r.organization || []).map(toCamel)),
-      organizationStatus: groupByMonth((r.organizationStatus || []).map(toCamel)),
-      organizationCategory: groupByMonth((r.organizationCategory || []).map(toCamel)),
-      categoryFlow: groupByMonth((r.categoryFlow || []).map(toCamel)),
-      itemTrend: groupByCode((r.itemTrend || []).map(toCamel)),
-      categoryFlowStatus: groupByMonth((r.categoryFlowStatus || []).map(toCamel)),
-    });
-    if (r.latestMonth) {
-      devProjectsCache.set(r.latestMonth, r.devProjects || null);
-      itemMonthCache.set(r.latestMonth, (r.itemDataset || []).map(toCamel));
-    }
-  } catch (e) {
-    console.warn('get_boot_bundle 실패, 개별 RPC로 폴백:', e.message);
-  }
-}
+// get_boot_bundle(supabase/get_boot_bundle.sql)로 왕복 횟수를 9->1로 줄여봤지만,
+// 서버 쪽에서 그 9개 호출을 순서대로(직렬로) 처리하다 보니 원래 클라이언트가
+// 갖고 있던 RPC_CONCURRENCY=3 병렬성을 잃어서 오히려 그대로거나 더 걸렸다
+// (2026-09-19 확인). 병목이 왕복 지연이 아니라 쿼리 자체 실행 시간이라 번들링이
+// 안 맞았다 — 그래서 다시 개별 호출 + 동시실행 큐 방식으로 되돌린다. SQL 함수
+// 자체는 지워도 되지만 안 써도 무해해서 남겨둔다.
 
 async function fetchSummary() {
-  if (!summaryCache) await tryLoadBootBundle();
   if (summaryCache) return summaryCache;
   const rows = await getDataset('summary', null); // p_month/p_months 둘 다 null이면 전체 반환
   const months = rows.map(r => r.month).sort();
