@@ -8,11 +8,12 @@
 -- 이 함수는 그 호출들을 서버 안에서 순서대로(같은 트랜잭션) 실행해 하나의
 -- JSON으로 합쳐 돌려준다 — 네트워크 왕복이 여러 번에서 1번으로 준다.
 --
--- ⚠️ 실행 전 확인 필요: 아래 get_dataset / get_item_trend / get_category_flow_status /
--- get_dev_projects / get_item_dataset 호출부의 파라미터 이름·타입이 실제 함수
--- 시그니처와 일치하는지 Supabase 대시보드(Database > Functions)에서 먼저 확인하고,
--- 다르면 이 파일을 고친 뒤 SQL Editor에서 실행할 것. (이 저장소엔 원본 함수들의
--- CREATE FUNCTION 정의가 없어서 loader.js의 호출부 모양만 보고 추정했다.)
+-- 파라미터 이름은 추측이 아니다: loader.js가 이미 이 이름들로 각 RPC를 성공적으로
+-- 호출하고 있고(PostgREST는 JSON 바디의 키를 함수 파라미터 이름과 정확히 매칭해야
+-- 호출이 성립한다), 아래에서도 위치가 아니라 이름(:=)으로 호출해 선언 순서와
+-- 무관하게 맞도록 했다. 유일하게 못 미더운 건 p_months의 실제 타입뿐이다(text[]로
+-- 가정) — SQL Editor에서 그냥 실행해보고, 타입 에러가 나면 그 메시지를 알려줄 것
+-- (jsonb 등으로 바꿔서 다시 줄 수 있다).
 
 create or replace function get_boot_bundle(p_session_token text)
 returns json
@@ -32,7 +33,7 @@ declare
   v_dev_projects json;
   v_item_dataset json;
 begin
-  v_summary := get_dataset(p_session_token, 'summary', null);
+  v_summary := get_dataset(p_session_token := p_session_token, p_dataset := 'summary', p_months := null);
   if not coalesce((v_summary->>'ok')::boolean, false) then
     return v_summary; -- 세션 만료 등 -- 클라이언트가 기존과 같은 {ok:false, error} 모양을 그대로 받는다
   end if;
@@ -46,14 +47,14 @@ begin
 
   v_latest := v_months[array_length(v_months, 1)];
 
-  v_organization         := get_dataset(p_session_token, 'organization', v_months);
-  v_organization_status  := get_dataset(p_session_token, 'organizationStatus', v_months);
-  v_organization_category:= get_dataset(p_session_token, 'organizationCategory', v_months);
-  v_category_flow        := get_dataset(p_session_token, 'categoryFlow', v_months);
-  v_item_trend           := get_item_trend(p_session_token, v_months);
-  v_category_flow_status := get_category_flow_status(p_session_token, v_months);
-  v_dev_projects         := get_dev_projects(p_session_token, v_latest);
-  v_item_dataset         := get_item_dataset(p_session_token, array[v_latest]);
+  v_organization          := get_dataset(p_session_token := p_session_token, p_dataset := 'organization', p_months := v_months);
+  v_organization_status   := get_dataset(p_session_token := p_session_token, p_dataset := 'organizationStatus', p_months := v_months);
+  v_organization_category := get_dataset(p_session_token := p_session_token, p_dataset := 'organizationCategory', p_months := v_months);
+  v_category_flow         := get_dataset(p_session_token := p_session_token, p_dataset := 'categoryFlow', p_months := v_months);
+  v_item_trend            := get_item_trend(p_session_token := p_session_token, p_months := v_months);
+  v_category_flow_status  := get_category_flow_status(p_session_token := p_session_token, p_months := v_months);
+  v_dev_projects          := get_dev_projects(p_session_token := p_session_token, p_month := v_latest);
+  v_item_dataset          := get_item_dataset(p_session_token := p_session_token, p_months := array[v_latest]);
 
   return json_build_object(
     'ok', true,
