@@ -15,7 +15,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_cUbb0SrbFymgq_RuJ3j34A_FbxhRTzJ";
 // Promise.all로 쏘면 동시 커넥션이 몰려 anon 권한 쪽 statement timeout(500)이 잦아진다
 // (2026-09-18 확인 — service_role은 안 걸리는데 anon만 걸림, 커넥션 풀 경합으로 보임).
 // 그래서 모든 RPC 호출이 공유하는 작은 동시실행 큐를 통과하게 한다.
-const RPC_CONCURRENCY = 3;
+const RPC_CONCURRENCY = 2;
 let rpcActive = 0;
 const rpcQueue = [];
 function runRpcQueue() {
