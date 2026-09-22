@@ -3303,7 +3303,7 @@
     </div>
   </div>
 
-  <script src="loader.js?v=20260922ai"></script>
+  <script src="loader.js?v=20260922final"></script>
   <script>
     (async () => {
       await window.IRDASH.waitReady();
@@ -5967,17 +5967,14 @@
         const apiKeyInput = $("#ragApiKey"), apiState = $("#ragApiState"), apiTest = $("#ragApiTest"), apiPanel = $("#ragApiPanel"), settingsButton = $("#ragSettings");
         if (!launch || !panel || !answer) return;
         // 대시보드를 열 때 쓴 암호를 그대로 재사용 — 매번 다시 입력할 필요 없게.
-        if (typeof window.TKP_DASH_PASS === "string" && window.TKP_DASH_PASS) apiKeyInput.value = window.TKP_DASH_PASS;
         const setApiState = (message, state = "") => { apiState.textContent = message; apiState.className = "rag-api-state" + (state ? " " + state : ""); };
-        if (apiKeyInput.value.trim()) setApiState("대시보드 암호를 자동으로 연결했습니다 · 바로 질문해 보세요.", "ok");
-        /* "연결 설정"(암호 입력칸)은 기본적으로 숨긴다 — 아무나 API 설정을 건드리면 안 되므로,
-           좌하단 버전 표시(devModeTrigger)를 2초 안에 7번 눌러야 볼 수 있다.
-           단, 암호 자동주입이 실패해 키가 비어 있으면 챗봇이 먹통이 되지 않도록 예외로 열어 둔다. */
+        setApiState("로그인 인증으로 AI 챗봇이 자동 연결되었습니다.", "ok");
+        settingsButton.hidden = true;
+        apiPanel.classList.remove("open");
         let settingsUnlocked = false;
         function syncSettingsGate() {
-          const on = settingsUnlocked || !apiKeyInput.value.trim();
-          settingsButton.hidden = !on;
-          if (!on) apiPanel.classList.remove("open");
+          settingsButton.hidden = !settingsUnlocked;
+          if (!settingsUnlocked) apiPanel.classList.remove("open");
         }
         syncSettingsGate();
         (function () {
@@ -6750,13 +6747,6 @@ ${connectionOnly ? "" : ""}`;
           const base = chatHtml;
           input.value = "";
           suggestions.hidden = true; suggestions.innerHTML = "";
-          const pass = apiKeyInput.value.trim();
-          if (!pass) {
-            answer.innerHTML = `<h3>AI 연결이 필요합니다</h3><p class="rag-answer-summary">이 질문은 AI로 처리됩니다. 오른쪽 위 "연결 설정"에서 대시보드 접속 암호를 입력한 뒤 다시 질문해 주세요.</p>`;
-            apiPanel.classList.add("open");
-            finishTurn(base, q);
-            return;
-          }
           /* 보유 기간(data.months[0] ~ 마지막) 밖을 물으면 지어내지 말고 없다고만 답하도록
              INVENTORY_INSIGHT_RULES + evidence.dataRange로 AI 단계에서 막는다.
              "작년 대비"류를 여기서 무조건 차단하지는 않는다 — 실제로 여러 해 데이터가
