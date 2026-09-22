@@ -225,9 +225,11 @@ function renderLoginScreen() {
         box-shadow:0 2px 10px rgba(0,0,0,.08)}
       #irdashLogin h1{font-size:16px;margin:0 0 14px}
       #irdashLogin input{width:100%;padding:9px;margin-bottom:9px;border:1px solid #ccc;
-        border-radius:7px;font-size:14px;box-sizing:border-box}
-      #irdashLogin button{width:100%;padding:10px;background:#1a73e8;color:#fff;
-        border:none;border-radius:7px;font-weight:600;cursor:pointer}
+        border-radius:7px;font-size:14px;box-sizing:border-box;transition:border-color .15s,box-shadow .15s}
+      #irdashLogin input:focus{border-color:#177544;outline:none;box-shadow:0 0 0 2px rgba(23,117,68,.2)}
+      #irdashLogin button{width:100%;padding:10px;background:#177544;color:#fff;
+        border:none;border-radius:7px;font-weight:600;cursor:pointer;transition:background .15s}
+      #irdashLogin button:hover:not(:disabled){background:#126238}
       #irdashLogin button:disabled{opacity:.5}
       #irdashLogin .msg{font-size:12.5px;color:#c62828;min-height:18px;margin-top:4px}
     </style>
