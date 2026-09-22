@@ -209,7 +209,51 @@ function fetchSelectedItemMonthly(month) {
   return itemMonthCache.get(month);
 }
 
-window.IRDASH = { fetchSummary, fetchMonth, fetchSelectedItemMonthly };
+// ── AI 챗봇 전용 RPC 연결 ──────────────────────────────
+const AI_SUPABASE_URL = "https://tfosicfcsjdedmspffsu.supabase.co";
+const AI_SUPABASE_ANON_KEY = "sb_publishable_Z2PAXLvZcP6Glu_sFuQW_w_kVL7mYk_";
+let AI_SESSION = sessionStorage.getItem('irdash_ai_session') || '';
+
+async function loginAi(name, password) {
+  try {
+    const res = await fetch(`${AI_SUPABASE_URL}/rest/v1/rpc/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: AI_SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${AI_SUPABASE_ANON_KEY}`
+      },
+      body: JSON.stringify({ p_name: name, p_password: password })
+    });
+    const data = await res.json();
+    if (data.ok && data.token) {
+      AI_SESSION = data.token;
+      sessionStorage.setItem('irdash_ai_session', AI_SESSION);
+      return true;
+    }
+  } catch (e) {
+    console.warn('AI login error:', e);
+  }
+  return false;
+}
+
+async function askAiRaw(prompt, schema) {
+  if (!AI_SESSION) AI_SESSION = sessionStorage.getItem('irdash_ai_session') || '';
+  if (!AI_SESSION) throw new Error('AI 세션이 준비되지 않았습니다. 로그아웃 후 다시 로그인해 주세요.');
+  const res = await fetch(`${AI_SUPABASE_URL}/rest/v1/rpc/ask_ai_raw`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: AI_SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${AI_SUPABASE_ANON_KEY}`
+    },
+    body: JSON.stringify({ p_session_token: AI_SESSION, p_prompt: prompt, p_schema: schema })
+  });
+  if (!res.ok) throw new Error(`AI 서버 오류 (${res.status})`);
+  return await res.json();
+}
+
+window.IRDASH = { fetchSummary, fetchMonth, fetchSelectedItemMonthly, askAiRaw };
 
 // ── 로그인 화면 ──────────────────────────────────────────
 
@@ -267,12 +311,15 @@ async function doLogin(name, password) {
   $msg.style.color = '#555';
   $msg.textContent = '확인 중...';
   try {
-    const login = await supabaseRpc('login', { p_name: name, p_password: password });
+    const [login] = await Promise.all([
+      supabaseRpc('login', { p_name: name, p_password: password }),
+      loginAi(name, password)
+    ]);
     if (!login.ok) { $msg.style.color = '#c62828'; $msg.textContent = login.error; return; }
 
     try { localStorage.setItem('irdash_remembered_name', login.name); } catch (e) { /* 무시 */ }
 
-    SESSION = login.session; ME = login.name;
+    SESSION = login.session || login.token; ME = login.name;
     sessionStorage.setItem('irdash_session', SESSION);
     sessionStorage.setItem('irdash_name', ME);
 
@@ -289,7 +336,9 @@ async function doLogin(name, password) {
 function clearAllSessions() {
   sessionStorage.removeItem('irdash_session');
   sessionStorage.removeItem('irdash_name');
+  sessionStorage.removeItem('irdash_ai_session');
   SESSION = '';
+  AI_SESSION = '';
 }
 
 async function doLogout() {

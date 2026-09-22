@@ -3303,7 +3303,7 @@
     </div>
   </div>
 
-  <script src="loader.js?v=20260922green"></script>
+  <script src="loader.js?v=20260922ai"></script>
   <script>
     (async () => {
       await window.IRDASH.waitReady();
@@ -6208,20 +6208,16 @@ comparison.changes의 difference가 0.0이거나 금액·비율 모두 아주 �
           return { current, previous, changes, direction: direction > 0 ? '증가' : direction < 0 ? '감소' : '변화 없음', consecutiveDirectionMonths };
         }
         async function appendInventoryInsight(question, evidence, resultHtml) {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 15000);
           try {
-            const response = await fetch(RELAY_URL, { method: 'POST', signal: controller.signal,
-              headers: { 'Content-Type': 'application/json', 'X-Dash-Pass': apiKeyInput.value.trim() },
-              body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: INVENTORY_INSIGHT_RULES + '\n분석 자료(JSON):\n' + JSON.stringify({ question, ...evidence }) }] }], generationConfig: { thinkingConfig: { thinkingLevel: 'low' } } }) });
-            if (!response.ok) throw new Error('insight');
-            const payload = await response.json();
-            const text = payload?.candidates?.[0]?.content?.parts?.filter(p => !p.thought).map(p => p.text || '').join('').trim();
+            const prompt = INVENTORY_INSIGHT_RULES + '\n분석 자료(JSON):\n' + JSON.stringify({ question, ...evidence });
+            const result = await window.IRDASH.askAiRaw(prompt, null);
+            if (!result.ok) throw new Error('insight');
+            const text = (result.text || '').trim();
             if (!text) throw new Error('empty');
             return resultHtml + '<div class="rag-section-title">AI 정리</div>' + text.trim().split(/\n+/).filter(line => line.trim()).map(line => '<p class="rag-answer-summary" style="margin:0 0 12px;line-height:1.8">' + escHtml(line.trim()) + '</p>').join('');
           } catch (_) {
             return resultHtml + '<p class="rag-answer-summary">AI 정리를 가져오지 못했습니다. 계산 결과는 위 표에서 확인할 수 있습니다.</p>';
-          } finally { clearTimeout(timer); }
+          }
         }
         function renderOverall() {
           insightContext = { kind: 'overall', unit: '억원', history: inventorySeriesEvidence({ inventory: data.inventory, normal: data.normal, aging3: data.risk3, aging6: data.risk6, aging12: data.risk12, unsold: data.unsold, turnover: data.turnover }) };
@@ -6633,8 +6629,6 @@ comparison.changes의 difference가 0.0이거나 금액·비율 모두 아주 �
           return () => { clearInterval(loadingTimer); loadingTimer = null; };
         }
         async function callGemini(question, connectionOnly) {
-          const pass = apiKeyInput.value.trim();
-          if (!pass) throw new Error("대시보드 암호를 입력해 주세요.");
           const orgList = orgNames().map(n => data.orgs[n].label).join(", ");
           const categoryList = allCategoryEntries().map(e => `${e.mode}:${bareCategoryName(e.name)}`).join(", ");
           const prompt = connectionOnly ? "연결 확인용이다. dimension을 overall로 설정하고 나머지는 기본값으로 출력하라." : `
@@ -6673,20 +6667,9 @@ ${connectionOnly ? "" : ""}`;
             clarification: { type: "STRING" },
             clarification_options: { type: "ARRAY", items: { type: "STRING" }, maxItems: 6 }
           }, required: ["month", "dimension", "target", "targets", "mode", "metric", "status", "direction", "limit", "needs_clarification", "clarification", "clarification_options"] };
-          const response = await fetch(RELAY_URL, { method: "POST", headers: { "Content-Type": "application/json", "X-Dash-Pass": pass }, body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: connectionOnly ? prompt : `사용자 질문: ${question}\n${prompt}` }] }],
-            generationConfig: { responseMimeType: "application/json", responseSchema: schema, thinkingConfig: { thinkingLevel: "low" } }
-          }) });
-          const bodyText = await response.text();
-          let payload = {};
-          try { payload = JSON.parse(bodyText); } catch (e) {}
-          if (!response.ok) {
-            if (response.status === 401) throw new Error("대시보드 암호가 올바르지 않습니다.");
-            if (response.status === 403) throw new Error("허용되지 않은 접속 경로입니다.");
-            throw new Error((payload && payload.error && payload.error.message) || bodyText || `서버 오류 (${response.status})`);
-          }
-          const raw = payload && payload.candidates && payload.candidates[0] && payload.candidates[0].content && payload.candidates[0].content.parts
-            ? payload.candidates[0].content.parts.map(part => part.text || "").join("") : "";
+          const result = await window.IRDASH.askAiRaw(connectionOnly ? prompt : `사용자 질문: ${question}\n${prompt}`, schema);
+          if (!result.ok) throw new Error(result.error || "AI 연결 오류");
+          const raw = result.text;
           if (!raw) throw new Error("AI에서 응답을 받지 못했습니다.");
           return JSON.parse(raw);
         }
@@ -6831,7 +6814,7 @@ ${connectionOnly ? "" : ""}`;
             geminiBusy = false; apiTest.disabled = false;
           }
         });
-        launch.addEventListener("click", () => { panel.classList.add("open"); if (!apiKeyInput.value.trim()) apiPanel.classList.add("open"); setTimeout(() => (apiKeyInput.value.trim() ? input.focus() : apiKeyInput.focus()), 120); });
+        launch.addEventListener("click", () => { panel.classList.add("open"); setTimeout(() => input.focus(), 120); });
         closeBtn.addEventListener("click", () => panel.classList.remove("open"));
         document.addEventListener("pointerdown", event => {
           if (!panel.classList.contains("open")) return;
@@ -6875,9 +6858,9 @@ ${connectionOnly ? "" : ""}`;
 
   <button class="rag-launch" id="ragLaunch" type="button">⌕ AX_챗봇</button>
   <div class="tkp-natural-drawer" id="tkpNaturalDrawer">
-    <div class="rag-head"><div class="rag-head-title"><i>⌕</i><div><b>AX_챗봇</b></div></div><button class="rag-toolbar-button" id="ragSettings" type="button">연결 설정</button><button class="rag-close" id="ragClose" type="button" aria-label="닫기">×</button></div>
+    <div class="rag-head"><div class="rag-head-title"><i>⌕</i><div><b>AX_챗봇</b></div></div><button class="rag-toolbar-button" id="ragSettings" type="button" hidden>연결 설정</button><button class="rag-close" id="ragClose" type="button" aria-label="닫기">×</button></div>
     <div class="rag-body">
-      <div class="rag-api" id="ragApiPanel"><div class="rag-api-row"><input class="rag-api-input" id="ragApiKey" type="password" autocomplete="off" placeholder="대시보드 접속 암호 입력 (저장하지 않음)"><button class="rag-api-test" id="ragApiTest" type="button">연결 확인</button></div><div class="rag-api-state" id="ragApiState">암호가 없으면 로컬 규칙으로만 동작합니다.</div></div>
+      <div class="rag-api" id="ragApiPanel" hidden><div class="rag-api-row"><input class="rag-api-input" id="ragApiKey" type="password" autocomplete="off" placeholder="대시보드 접속 암호 입력 (저장하지 않음)"><button class="rag-api-test" id="ragApiTest" type="button">연결 확인</button></div><div class="rag-api-state" id="ragApiState">로그인 인증으로 AI 챗봇이 자동 연결되었습니다.</div></div>
       <div class="rag-suggestions" id="ragSuggestions" hidden></div>
       <section class="rag-answer" id="ragAnswer"><div class="rag-start"><h3>무엇을 확인할까요?</h3><p>검증된 예시 질문을 선택하거나 아래에 직접 입력하세요.</p><div class="rag-start-grid"></div></div></section>
     </div>
