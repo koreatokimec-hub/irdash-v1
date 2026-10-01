@@ -271,6 +271,10 @@ function renderLoginScreen() {
       #irdashLogin input{width:100%;padding:9px;margin-bottom:9px;border:1px solid #ccc;
         border-radius:7px;font-size:14px;box-sizing:border-box;transition:border-color .15s,box-shadow .15s}
       #irdashLogin input:focus{border-color:#177544;outline:none;box-shadow:0 0 0 2px rgba(23,117,68,.2)}
+      #irdashLogin .idrow{position:relative}
+      #irdashLogin .idrow input{padding-right:112px}
+      #irdashLogin .idrow .dom{position:absolute;right:10px;top:9px;font-size:13px;color:#b4b4b8;
+        pointer-events:none;user-select:none}
       #irdashLogin button{width:100%;padding:10px;background:#177544;color:#fff;
         border:none;border-radius:7px;font-weight:600;cursor:pointer;transition:background .15s}
       #irdashLogin button:hover:not(:disabled){background:#126238}
@@ -279,7 +283,10 @@ function renderLoginScreen() {
     </style>
     <div class="card">
       <h1>재고 대시보드 로그인</h1>
-      <input id="irdashName" placeholder="이름" autocomplete="username">
+      <div class="idrow">
+        <input id="irdashName" placeholder="아이디" autocomplete="username" autocapitalize="none" spellcheck="false">
+        <span class="dom">@tokimec.co.kr</span>
+      </div>
       <input id="irdashPw" type="password" placeholder="비밀번호" autocomplete="current-password">
       <button id="irdashBtn">로그인</button>
       <div class="msg" id="irdashMsg"></div>
@@ -293,7 +300,7 @@ function renderLoginScreen() {
 
   try {
     const remembered = localStorage.getItem('irdash_remembered_name');
-    if (remembered) { $('irdashName').value = remembered; $('irdashPw').focus(); }
+    if (remembered) { $('irdashName').value = remembered.replace(/@tokimec\.co\.kr$/i, ''); $('irdashPw').focus(); }
   } catch (e) { /* 저장소 접근 불가면 그냥 빈 칸으로 둔다 */ }
 }
 
