@@ -436,9 +436,11 @@ function openAccountDialog(changePassword = false) {
       const result = await response.json();
       if (!result.ok) throw new Error(result.error || '비밀번호를 변경하지 못했습니다.');
       clearAllSessions();
-      overlay.querySelectorAll('input').forEach(input => { input.value = ''; input.disabled = true; });
+      overlay.querySelectorAll('input').forEach(input => { input.value = ''; input.remove(); });
+      overlay.querySelector('#irdashAccountTitle').textContent = '비밀번호 변경 완료';
+      overlay.querySelector('#irdashAccountCancel').remove();
       message.style.color = '#177544';
-      message.textContent = '재고 로그인 비밀번호가 변경되었습니다. 새 비밀번호로 다시 로그인해 주세요.';
+      message.textContent = '새 비밀번호로 다시 로그인해 주세요.';
       const submit = overlay.querySelector('#irdashPasswordSubmit');
       submit.type = 'button';
       submit.textContent = '다시 로그인';
