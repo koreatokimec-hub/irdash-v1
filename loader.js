@@ -355,6 +355,106 @@ async function doLogout() {
 }
 window.IRDASH.logout = doLogout;
 
+// 로그인 설정은 화면의 재고 조회와 독립적으로 동작한다.
+function openAccountDialog(changePassword = false) {
+  document.getElementById('irdashAccountDialog')?.remove();
+  const previousFocus = document.activeElement;
+  const overlay = document.createElement('div');
+  overlay.id = 'irdashAccountDialog';
+  overlay.innerHTML = `
+    <style>
+      #irdashAccountDialog{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.38);display:flex;align-items:center;justify-content:center;font-family:system-ui,"Malgun Gothic",sans-serif}
+      #irdashAccountDialog .account-card{width:280px;max-width:calc(100vw - 64px);padding:22px;background:#fff;color:#17202a;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.15)}
+      #irdashAccountDialog h2{font-size:16px;margin:0 0 10px}
+      #irdashAccountDialog p{font-size:12px;color:#666;margin:0 0 14px}
+      #irdashAccountDialog input{box-sizing:border-box;width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;margin-bottom:8px;font-size:13px}
+      #irdashAccountDialog button{padding:11px;border:1px solid #ccc;border-radius:6px;background:#fff;color:#17202a;cursor:pointer;font-size:13px}
+      #irdashAccountDialog .account-actions{display:flex;gap:8px;margin-top:8px}
+      #irdashAccountDialog .account-actions button{flex:1}
+      #irdashAccountDialog .account-primary{background:#177544;color:#fff;border-color:#177544}
+      #irdashAccountDialog .account-menu{display:grid;gap:8px}
+      #irdashAccountDialog button:disabled{opacity:.55;cursor:wait}
+      #irdashAccountDialog .account-message{color:#c62828;font-size:12px;min-height:18px;margin:6px 0;white-space:pre-wrap}
+    </style>
+    <section class="account-card" role="dialog" aria-modal="true" aria-labelledby="irdashAccountTitle">
+      <h2 id="irdashAccountTitle">${changePassword ? '비밀번호 변경' : '로그인 설정'}</h2>
+      ${changePassword ? `
+        <form id="irdashPasswordForm">
+          <input id="irdashOldPassword" type="password" placeholder="현재 비밀번호" aria-label="현재 비밀번호" autocomplete="current-password" required>
+          <input id="irdashNewPassword" type="password" placeholder="새 비밀번호" aria-label="새 비밀번호" autocomplete="new-password" minlength="4" required>
+          <input id="irdashConfirmPassword" type="password" placeholder="새 비밀번호 확인" aria-label="새 비밀번호 확인" autocomplete="new-password" minlength="4" required>
+          <div class="account-message" id="irdashPasswordMessage" role="status" aria-live="polite"></div>
+          <div class="account-actions"><button type="button" id="irdashAccountCancel">취소</button><button type="submit" class="account-primary" id="irdashPasswordSubmit">변경</button></div>
+        </form>` : `
+        <p id="irdashAccountName"></p>
+        <div class="account-menu"><button id="irdashOpenPassword">비밀번호 변경</button><button id="irdashAccountLogout">로그아웃</button><button id="irdashAccountCancel">닫기</button></div>`}
+    </section>`;
+  document.body.appendChild(overlay);
+  let busy = false;
+  const close = () => { if (!busy) { overlay.remove(); previousFocus?.focus(); } };
+  overlay.querySelector('#irdashAccountCancel').addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    if (e.key === 'Tab') {
+      const fields = [...overlay.querySelectorAll('input, button')].filter(el => !el.disabled);
+      const first = fields[0], last = fields[fields.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  });
+  if (!changePassword) {
+    overlay.querySelector('#irdashAccountName').textContent = `${ME} 님으로 로그인됨`;
+    overlay.querySelector('#irdashOpenPassword').addEventListener('click', () => openAccountDialog(true));
+    overlay.querySelector('#irdashAccountLogout').addEventListener('click', doLogout);
+    overlay.querySelector('#irdashOpenPassword').focus();
+    return;
+  }
+  overlay.querySelector('#irdashOldPassword').focus();
+  overlay.querySelector('#irdashPasswordForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (busy) return;
+    const oldPassword = overlay.querySelector('#irdashOldPassword').value;
+    const newPassword = overlay.querySelector('#irdashNewPassword').value;
+    const confirmation = overlay.querySelector('#irdashConfirmPassword').value;
+    const message = overlay.querySelector('#irdashPasswordMessage');
+    if (newPassword.length < 4) { message.textContent = '새 비밀번호는 4자 이상으로 입력해 주세요.'; return; }
+    if (newPassword !== confirmation) { message.textContent = '새 비밀번호 확인이 일치하지 않습니다.'; return; }
+    if (newPassword === oldPassword || newPassword === '1234') { message.textContent = '초기 비밀번호 및 현재 비밀번호와 다른 비밀번호를 입력해 주세요.'; return; }
+    busy = true;
+    const buttons = [...overlay.querySelectorAll('button')];
+    buttons.forEach(button => { button.disabled = true; });
+    message.textContent = '변경 중…';
+    try {
+      // 비밀번호 변경은 기존 세션을 폐기하므로 자동 재시도하지 않는다.
+      const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/change_password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+        body: JSON.stringify({ p_session_token: SESSION, p_old_password: oldPassword, p_new_password: newPassword }),
+      });
+      if (!response.ok) throw new Error(`서버 오류 (${response.status})`);
+      const result = await response.json();
+      if (!result.ok) throw new Error(result.error || '비밀번호를 변경하지 못했습니다.');
+      clearAllSessions();
+      overlay.querySelectorAll('input').forEach(input => { input.value = ''; input.disabled = true; });
+      message.style.color = '#177544';
+      message.textContent = '재고 로그인 비밀번호가 변경되었습니다. 새 비밀번호로 다시 로그인해 주세요.';
+      const submit = overlay.querySelector('#irdashPasswordSubmit');
+      submit.type = 'button';
+      submit.textContent = '다시 로그인';
+      submit.disabled = false;
+      submit.addEventListener('click', () => location.reload(), { once: true });
+      submit.focus();
+    } catch (error) {
+      message.textContent = `변경 실패: ${error.message}\n연결이 끊겼다면 다시 로그인하여 변경 여부를 확인해 주세요.`;
+      busy = false;
+      buttons.forEach(button => { button.disabled = false; });
+    }
+  });
+}
+
+document.getElementById('irdashAccountSettings')?.addEventListener('click', () => openAccountDialog());
+
 async function boot() {
   if (SESSION) {
     // 기존 세션이 살아있는지 확인만 한다 — 실제 데이터는 fetchSummary/fetchMonth가
