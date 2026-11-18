@@ -11,6 +11,36 @@
 const SUPABASE_URL = "https://pkvrxdtyqihvjbpdysqw.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_cUbb0SrbFymgq_RuJ3j34A_FbxhRTzJ";
 
+// ── 공식 주소가 아닌 곳(Ctrl+S 저장본 등)에서는 서버에 접속하지 않는다 ─────────────
+// 저장한 HTML을 열면 주소가 file:///... 이라 여기서 걸러진다. 회사 서버로 옮기면
+// ALLOWED_ORIGINS에 그 주소를 추가한다. 로컬 테스트용으로 localhost는 허용한다.
+// (한계: 저장본 코드를 직접 고치면 우회할 수 있다. 완전한 차단은 서버 쪽 설정이 필요하다.)
+const ALLOWED_ORIGINS = ['https://koreatokimec-hub.github.io'];
+const IS_OFFICIAL_ORIGIN =
+  ALLOWED_ORIGINS.includes(location.origin) ||
+  ['localhost', '127.0.0.1'].includes(location.hostname);
+
+function renderBlockedScreen() {
+  document.getElementById('irdashLogin')?.remove();
+  const box = document.createElement('div');
+  box.id = 'irdashLogin';
+  box.innerHTML = `
+    <style>
+      #irdashLogin{position:fixed;inset:0;background:#f4f4f6;z-index:99999;visibility:visible;
+        display:flex;align-items:center;justify-content:center;
+        font-family:system-ui,"Malgun Gothic",sans-serif}
+      #irdashLogin .card{background:#fff;padding:28px;border-radius:12px;width:340px;text-align:center;
+        box-shadow:0 2px 10px rgba(0,0,0,.08)}
+      #irdashLogin h1{font-size:16px;margin:0 0 10px}
+      #irdashLogin p{font-size:13.5px;color:#555;line-height:1.6;margin:0}
+    </style>
+    <div class="card">
+      <h1>이 파일로는 접속할 수 없습니다</h1>
+      <p>저장하거나 복사한 파일에서는 사용할 수 없습니다.<br>공식 주소로 접속해 주세요.</p>
+    </div>`;
+  document.body.appendChild(box);
+}
+
 // 부팅 시 organization/organizationStatus/.../item(청크별) 등 여러 RPC를 한꺼번에
 // Promise.all로 쏘면 동시 커넥션이 몰려 anon 권한 쪽 statement timeout(500)이 잦아진다
 // (2026-09-18 확인 — service_role은 안 걸리는데 anon만 걸림, 커넥션 풀 경합으로 보임).
@@ -32,6 +62,7 @@ function withRpcSlot(task) {
 }
 
 async function supabaseRpc(fn, body, attempt = 1) {
+  if (!IS_OFFICIAL_ORIGIN) throw new Error('공식 주소에서만 접속할 수 있습니다.');
   return withRpcSlot(async () => {
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
@@ -155,14 +186,12 @@ function ensureAllMonthsLoaded(months) {
       getDataset('organizationStatus', months),
       getDataset('organizationCategory', months),
       getDataset('categoryFlow', months),
-      getItemTrend(months),
       getCategoryFlowStatus(months),
-    ]).then(([organization, organizationStatus, organizationCategory, categoryFlow, itemTrend, categoryFlowStatus]) => ({
+    ]).then(([organization, organizationStatus, organizationCategory, categoryFlow, categoryFlowStatus]) => ({
       organization: groupByMonth(organization),
       organizationStatus: groupByMonth(organizationStatus),
       organizationCategory: groupByMonth(organizationCategory),
       categoryFlow: groupByMonth(categoryFlow),
-      itemTrend: groupByCode(itemTrend),
       categoryFlowStatus: groupByMonth(categoryFlowStatus),
     }));
   }
@@ -197,7 +226,9 @@ async function fetchMonth(month) {
     // 마지막(선택된) 달 하나뿐이라 fetchSelectedItemMonthly로 따로 뺐다
     // (index.html의 buildDashboardData 참고).
     itemMonthly: [],
-    itemTrend: grouped.itemTrend,
+    // 품목 이력은 부팅 때 받지 않는다 — 선택 월+전월만 fetchRecentItemTrend 로,
+    // 상세창을 열 때 fetchItemHistory 로 받는다(index.html 참고).
+    itemTrend: new Map(),
     devProjects,
   };
 }
@@ -253,7 +284,49 @@ async function askAiRaw(prompt, schema) {
   return await res.json();
 }
 
-window.IRDASH = { fetchSummary, fetchMonth, fetchSelectedItemMonthly, askAiRaw };
+// ── 품목 이력 지연 로딩 ───────────────────────────────────────────────
+// 품목 표·정렬·합계는 선택 월과 전월 두 달 값만 쓴다. 그래서 부팅 때는 그 두 달만 받는다.
+const recentTrendCache = new Map();
+function fetchRecentItemTrend(months) {
+  const recent = months.slice(-2);
+  const key = recent.join(',');
+  if (!recentTrendCache.has(key)) recentTrendCache.set(key, getItemTrend(recent).then(groupByCode));
+  return recentTrendCache.get(key);
+}
+
+// 구분(상품/제품/원부자재)별 월 합계·부동 합계는 서버가 미리 집계해 준다(전 기간 한 번).
+let accountTypeSeriesPromise = null;
+function fetchAccountTypeSeries() {
+  if (!accountTypeSeriesPromise) {
+    accountTypeSeriesPromise = (async () => {
+      const summary = await fetchSummary();
+      const r = await supabaseRpc('get_account_type_series', {
+        p_session_token: SESSION, p_months: summary.meta.availableMonths,
+      });
+      if (!r.ok || !Array.isArray(r.rows)) throw new Error(r.error || '구분별 합계 로딩 실패');
+      return r.rows.map(toCamel);
+    })().catch(e => { accountTypeSeriesPromise = null; throw e; });
+  }
+  return accountTypeSeriesPromise;
+}
+
+// 품목 상세창을 열 때만 그 품목 하나의 전 기간 이력을 받는다(코드별 캐시).
+const itemHistoryCache = new Map();
+function fetchItemHistory(code) {
+  if (!itemHistoryCache.has(code)) {
+    itemHistoryCache.set(code, (async () => {
+      const r = await supabaseRpc('get_item_history', { p_session_token: SESSION, p_code: code });
+      if (!r.ok) throw new Error(r.error || '품목 이력 로딩 실패');
+      return r.row || null;
+    })().catch(e => { itemHistoryCache.delete(code); throw e; }));
+  }
+  return itemHistoryCache.get(code);
+}
+
+window.IRDASH = {
+  fetchSummary, fetchMonth, fetchSelectedItemMonthly, askAiRaw,
+  fetchRecentItemTrend, fetchAccountTypeSeries, fetchItemHistory,
+};
 
 // ── 로그인 화면 ──────────────────────────────────────────
 
@@ -458,6 +531,7 @@ function openAccountDialog(changePassword = false) {
 document.getElementById('irdashAccountSettings')?.addEventListener('click', () => openAccountDialog());
 
 async function boot() {
+  if (!IS_OFFICIAL_ORIGIN) { renderBlockedScreen(); return; }
   if (SESSION) {
     // 기존 세션이 살아있는지 확인만 한다 — 실제 데이터는 fetchSummary/fetchMonth가
     // 필요할 때 직접 부른다(loginAndBoot는 요약/조직/구분만 주고 나머지는 없음).
@@ -472,4 +546,4 @@ async function boot() {
   renderLoginScreen();
 }
 
-boot().catch(e => { console.error(e); renderLoginScreen(); });
+boot().catch(e => { console.error(e); if (IS_OFFICIAL_ORIGIN) renderLoginScreen(); else renderBlockedScreen(); });

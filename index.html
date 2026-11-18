@@ -3572,6 +3572,23 @@
         return null;
       }
 
+      // 품목 전 기간 이력은 부팅 때 받지 않는다. 상세창·AI 품목 답변처럼 실제로 필요할 때만
+      // 그 품목 하나를 서버에서 받아 values/statuses 를 채운다(한 번 받으면 historyLoaded).
+      async function hydrateProductHistory(product) {
+        if (product.historyLoaded) return;
+        const history = await window.IRDASH.fetchItemHistory(product.code);
+        const historyMonths = history?.months || [];
+        product.values = data.months.map(month => {
+          const index = historyMonths.indexOf(month);
+          return index >= 0 ? toMillion(history.values[index]) : 0;
+        });
+        product.statuses = data.months.map(month => {
+          const index = historyMonths.indexOf(month);
+          return index >= 0 ? (history.statuses[index] || null) : null;
+        });
+        product.historyLoaded = true;
+      }
+
       function buildProducts(months, details) {
         // 품목별 월별 values/statuses는 더 이상 매달 itemMonthly를 훑어 만들지 않고
         // (품목당 한 행에 월별 배열을 들고 있는) itemTrend에서 바로 읽는다.
@@ -3621,6 +3638,9 @@
         // (buildProducts의 currentItems). 월 범위 전체가 아니라 이 달 하나만 따로 받는다 —
         // 그렇지 않으면 화면 월 범위(최초 진입 시 전체 개월)만큼 8만행 문제가 되풀이된다.
         details[details.length - 1].itemMonthly = await window.IRDASH.fetchSelectedItemMonthly(months[months.length - 1]);
+        // 품목 이력은 선택 월+전월 두 달만 받는다(표·정렬·합계는 이 두 달만 쓴다). 전 기간 이력은
+        // 상세창을 열 때 hydrateProductHistory 가 그 품목만 받아 채운다.
+        details[details.length - 1].itemTrend = await window.IRDASH.fetchRecentItemTrend(months);
         const summaryByMonth = new Map(
           summaryPayload.monthlySummary.map(row => [row.month, row])
         );
@@ -3628,22 +3648,16 @@
         // 구분(상품/제품/원부자재)별 월별 합계·부동재고 합계도 예전엔 매달 itemMonthly를
         // 전부 훑어 만들었다. itemTrend(품목당 한 행, 월별 values/statuses 배열)를
         // 한 번만 순회해 두 합계를 같이 쌓는다.
-        const itemTrendRows = [...(details[details.length - 1]?.itemTrend || new Map()).values()];
+        // 구분별 월 합계·부동 합계는 서버가 미리 집계해 준 값(get_account_type_series)을 쓴다.
         const accountTypeTotals = { "상품": months.map(() => 0), "제품": months.map(() => 0), "원부자재": months.map(() => 0) };
         const accountTypeRisk = { "상품": months.map(() => 0), "제품": months.map(() => 0), "원부자재": months.map(() => 0) };
-        itemTrendRows.forEach(item => {
-          const type = normalizeAccountType(item.accountType);
+        (await window.IRDASH.fetchAccountTypeSeries()).forEach(row => {
+          const type = normalizeAccountType(row.accountType);
           if (!accountTypeTotals[type]) return;
-          const trendMonths = item.months || [];
-          months.forEach((month, index) => {
-            const ti = trendMonths.indexOf(month);
-            if (ti < 0) return;
-            const amount = Number(item.values[ti] || 0);
-            accountTypeTotals[type][index] += amount;
-            if (["3개월", "6개월", "12개월"].includes(statusBucketOf(item.statuses[ti]))) {
-              accountTypeRisk[type][index] += amount;
-            }
-          });
+          const index = months.indexOf(row.month);
+          if (index < 0) return;
+          accountTypeTotals[type][index] += Number(row.total || 0);
+          accountTypeRisk[type][index] += Number(row.risk || 0);
         });
         const accountTypeSeries = accountType => months.map((month, index) => {
           const inTransit = accountType === "상품"
@@ -5108,7 +5122,16 @@
         $$(`${container} tr[data-code]`).forEach(row => row.addEventListener("click", () => openDrawer(row.dataset.code)));
       }
 
-      function openDrawer(code) {
+      async function openDrawer(code) {
+        const target = data.products.find(p => p.code === code);
+        if (target) {
+          try { await hydrateProductHistory(target); }
+          catch (error) { console.warn("품목 이력 로딩 실패", error); }
+        }
+        renderDrawer(code);
+      }
+
+      function renderDrawer(code) {
         const product = data.products.find(p => p.code === code);
         if (!product) return;
         state.selectedProductCode = code;
@@ -6459,6 +6482,14 @@ comparison.changes의 difference가 0.0이거나 금액·비율 모두 아주 �
         }
 
         function renderItem(product) {
+          // 전 기간 이력이 아직 없으면 받아 온 뒤 다시 그린다(보통은 handleQuestion 에서 미리 받는다).
+          if (!product.historyLoaded) {
+            answer.innerHTML = '<p class="rag-answer-summary">품목 이력을 불러오는 중입니다…</p>';
+            hydrateProductHistory(product).then(() => renderItem(product)).catch(() => {
+              answer.innerHTML = '<p class="rag-answer-summary">품목 이력을 불러오지 못했습니다.</p>';
+            });
+            return;
+          }
           const value = current(product.values), prev = previous(product.values);
           const trendSpan = 12;
           const trendRows = [];
@@ -6769,6 +6800,12 @@ ${connectionOnly ? "" : ""}`;
               answer.innerHTML = '<p class="rag-answer-summary">과거 품목 상세는 화면 기준월을 해당 월로 바꾼 후 조회해 주세요.</p>';
             } else {
               try {
+                // 질문에 코드나 품목명이 나오면 그 품목 이력을 먼저 받아 둔다(최대 5개).
+                const hay = `${q} ${JSON.stringify(command)}`;
+                await Promise.all(data.products
+                  .filter(p => (p.code && hay.includes(p.code)) || (p.name && p.name.length > 3 && hay.includes(p.name)))
+                  .slice(0, 5)
+                  .map(p => hydrateProductHistory(p).catch(() => {})));
                 state.month = requestedIndex;
                 executeCommand(command, q);
                 if (insightContext) {
